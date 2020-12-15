@@ -81,8 +81,17 @@ namespace azuredevops_export_wiki
                     }
                     else
                     {
+                        var orderFile = Path.Combine(_path, ".order");
 
-                        files = ReadOrderFiles(_path);
+                        if (File.Exists(orderFile))
+                        {
+                            files = ReadOrderFiles(_path);
+                        }
+                        else
+                        {
+                            Log("No .order file in top directory, listing .md files directly");
+                            files = DiscoverMarkdownFiles(_path);
+                        }
                     }
 
                     _telemetryClient.TrackEvent("Pages", null, new Dictionary<string, double>() { { "Pages", files.Count } });
@@ -108,7 +117,7 @@ namespace azuredevops_export_wiki
                         string mermaid = !string.IsNullOrEmpty(_options.MermaidJsPath) ?
                             $"<script>{File.ReadAllText(_options.MermaidJsPath)}</script>"
                             : @"<script src=""https://cdnjs.cloudflare.com/ajax/libs/mermaid/8.6.4/mermaid.min.js""></script>";
-                        
+
                         var mermaidInitialize = "<script>mermaid.initialize({ startOnLoad:true });</script>";
 
                         // adding the correct charset for unicode smileys and all that fancy stuff, and include mermaid.js
@@ -263,10 +272,8 @@ namespace azuredevops_export_wiki
 
         private string ConvertMarkdownToHTML(List<MarkdownFile> files)
         {
-            Log("Converting Markdown to HTML");
+            Log($"Converting Markdown to HTML for {files.Count} files");
             StringBuilder sb = new StringBuilder();
-
-            
 
             for (var i = 0; i < files.Count; i++)
             {
@@ -281,6 +288,8 @@ namespace azuredevops_export_wiki
                     Log($"File {file.FullName} specified in the order file was not found and will be skipped!", LogLevel.Error);
                     continue;
                 }
+
+                Log($"Converting {file.Name}")
 
                 var md = File.ReadAllText(file.FullName);
 
@@ -358,7 +367,7 @@ namespace azuredevops_export_wiki
                     };
 
                     var title = new StringBuilder(filename);
-                    foreach(var filenameEscape in filenameEscapes)
+                    foreach (var filenameEscape in filenameEscapes)
                     {
                         title.Replace(filenameEscape.Key, filenameEscape.Value);
                     }
@@ -445,6 +454,54 @@ namespace azuredevops_export_wiki
                 }
                 CorrectLinksAndImages(link, file, mf);
             }
+        }
+
+        private static int CompareFileNames(FileSystemInfo x, FileSystemInfo y)
+        {
+            return string.Compare(x.Name, y.Name);
+        }
+
+        private List<MarkdownFile> DiscoverMarkdownFiles(string path)
+        {
+            var result = new List<MarkdownFile>();
+
+            var directory = new DirectoryInfo(Path.GetFullPath(path));
+            var subdirs = directory.GetDirectories();
+            var files = directory.GetFiles("*.md");
+
+            var combined = new List<FileSystemInfo>();
+            combined.AddRange(subdirs);
+            combined.AddRange(files);
+
+            combined.Sort(CompareFileNames);
+
+            Log($"Discovered list of {combined.Count} items in {path} (with {subdirs.Length} subdirectories)");
+
+            foreach (var order in combined)
+            {
+                if (order.Name == ".git")
+                {
+                    continue;
+                }
+
+                if (order.GetType() == typeof(DirectoryInfo))
+                {
+                    Log($"  Recursing into {order.Name}");
+                    var childPath = order.FullName;
+                    result.AddRange(DiscoverMarkdownFiles(childPath));
+                }
+                else
+                {
+                    Log($"  Adding {order.Name}");
+                    var relativePath = order.FullName.Substring(directory.FullName.Length);
+                    MarkdownFile mf = new MarkdownFile();
+                    mf.AbsolutePath = $"{order}";
+                    mf.RelativePath = $"{relativePath}";
+                    result.Add(mf);
+                }
+            }
+
+            return result;
         }
 
         private List<MarkdownFile> ReadOrderFiles(string path)
